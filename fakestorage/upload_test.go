@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"cloud.google.com/go/storage"
 	"google.golang.org/api/googleapi"
 )
 
@@ -199,5 +200,53 @@ func TestServerInvalidUploadType(t *testing.T) {
 	expectedStatus := http.StatusBadRequest
 	if resp.StatusCode != expectedStatus {
 		t.Errorf("wrong status returned\nwant %d\ngot  %d", expectedStatus, resp.StatusCode)
+	}
+}
+
+func TestServerClientUploadPreconditions(t *testing.T) {
+	ctx := context.Background()
+	server := NewServer(nil)
+	defer server.Stop()
+	const bucketName = "other-bucket"
+	server.CreateBucket(bucketName)
+	data := []byte("some nice content")
+	client := server.Client()
+	// Create object handle with precondition that file cannot exist
+	objectHandle := client.Bucket(bucketName).Object("file1.txt").If(storage.Conditions{DoesNotExist: true})
+	// Write file
+	writer := objectHandle.NewWriter(ctx)
+	_, err := writer.Write(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Try overwriting same object handle
+	writer = objectHandle.NewWriter(ctx)
+	_, err = writer.Write(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This should return error with code 412
+	err = writer.Close()
+	if apiError, is := err.(*googleapi.Error); is {
+		if apiError.Code != http.StatusPreconditionFailed {
+			t.Errorf("Overwriting file with precondition \"DoesNotExist\" did not fail as expected. Got error \"%v\"", err)
+		}
+	} else {
+		t.Errorf("Overwriting file with precondition \"DoesNotExist\" did not fail as expected. Got \"%v\"", err)
+	}
+	// This should not return error
+	objectHandle = client.Bucket(bucketName).Object("file1.txt").If(storage.Conditions{GenerationMatch: 1})
+	writer = objectHandle.NewWriter(ctx)
+	_, err = writer.Write(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.Close()
+	if err != nil {
+		t.Errorf("Overwriting file with precondition \"GenerationMatch\" failed: %v", err)
 	}
 }

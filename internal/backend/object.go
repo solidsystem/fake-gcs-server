@@ -6,6 +6,8 @@ type Object struct {
 	Name       string `json:"-"`
 	Content    []byte
 	Crc32c     string
+	// Generation of this object. Used to check preconditions.
+	Generation int64 `json:"generation,omitempty,string"`
 }
 
 // ID is useful for comparing objects

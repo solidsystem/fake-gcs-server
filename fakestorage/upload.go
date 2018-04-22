@@ -6,8 +6,10 @@ package fakestorage
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/ioutil"
 	"mime"
@@ -16,9 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"encoding/base64"
-	"hash/crc32"
-
+	"cloud.google.com/go/storage"
 	"github.com/gorilla/mux"
 )
 
@@ -62,9 +62,12 @@ func (s *Server) simpleUpload(bucketName string, w http.ResponseWriter, r *http.
 		return
 	}
 	obj := Object{BucketName: bucketName, Name: name, Content: data, Crc32c: encodedCrc32cChecksum(data)}
-	err = s.createObject(obj)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	conditions, err := requestConditions(r)
+	if writeError(w, err, http.StatusBadRequest) {
+		return
+	}
+	err = s.createObject(obj, conditions)
+	if writeServerError(w, err) || writeError(w, err, http.StatusInternalServerError) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -115,9 +118,12 @@ func (s *Server) multipartUpload(bucketName string, w http.ResponseWriter, r *ht
 		return
 	}
 	obj := Object{BucketName: bucketName, Name: metadata.Name, Content: content, Crc32c: encodedCrc32cChecksum(content)}
-	err = s.createObject(obj)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	conditions, err := requestConditions(r)
+	if writeError(w, err, http.StatusBadRequest) {
+		return
+	}
+	err = s.createObject(obj, conditions)
+	if writeServerError(w, err) || writeError(w, err, http.StatusInternalServerError) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -174,9 +180,12 @@ func (s *Server) uploadFileContent(w http.ResponseWriter, r *http.Request) {
 	}
 	if commit {
 		delete(s.uploads, uploadID)
-		err = s.createObject(obj)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		conditions, err := requestConditions(r)
+		if writeError(w, err, http.StatusBadRequest) {
+			return
+		}
+		err = s.createObject(obj, conditions)
+		if writeServerError(w, err) || writeError(w, err, http.StatusInternalServerError) {
 			return
 		}
 	} else {
@@ -248,4 +257,22 @@ func generateUploadID() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", raw[:]), nil
+}
+
+// Conditions represents preconditions sent by the client for an operation on the server.
+// Decribed here: https://cloud.google.com/storage/docs/generations-preconditions
+// Initially only the ifGenerationMatch condition is supported. And only for uploads.
+func requestConditions(r *http.Request) (storage.Conditions, error) {
+	var conditions storage.Conditions
+	var err error
+	if ifGenerationMatchStr := r.URL.Query().Get("ifGenerationMatch"); ifGenerationMatchStr != "" {
+		var ifGenerationMatch int64
+		ifGenerationMatch, err = strconv.ParseInt(ifGenerationMatchStr, 10, 64)
+		if ifGenerationMatch == 0 {
+			conditions.DoesNotExist = true
+		} else {
+			conditions.GenerationMatch = ifGenerationMatch
+		}
+	}
+	return conditions, err
 }

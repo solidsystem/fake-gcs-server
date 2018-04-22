@@ -12,9 +12,12 @@ import (
 	"strconv"
 	"strings"
 
+	"cloud.google.com/go/storage"
 	"github.com/fsouza/fake-gcs-server/internal/backend"
 	"github.com/gorilla/mux"
 )
+
+var noConditions = storage.Conditions{}
 
 // Object represents the object that is stored within the fake server.
 type Object struct {
@@ -23,6 +26,8 @@ type Object struct {
 	Content    []byte `json:"-"`
 	// Crc32c checksum of Content. calculated by server when it's upload methods are used.
 	Crc32c string `json:"crc32c,omitempty"`
+	// Generation of this object. Used to check preconditions.
+	Generation int64 `json:"generation,omitempty,string"`
 }
 
 func (o *Object) id() string {
@@ -51,13 +56,27 @@ func (o *objectList) Swap(i int, j int) {
 func (s *Server) CreateObject(obj Object) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	err := s.createObject(obj)
+	err := s.createObject(obj, noConditions)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (s *Server) createObject(obj Object) error {
+func (s *Server) createObject(obj Object, conditions storage.Conditions) error {
+	// Set correct Generation number on the new object automatically.
+	if existingObj, err := s.backend.GetObject(obj.BucketName, obj.Name); err == nil {
+		// Overwriting existing object, so set Generation number to existing number + 1
+		obj.Generation = existingObj.Generation + 1
+	} else if err != backend.ObjectNotFound {
+		return err
+	}
+	// Check conditions
+	if conditions.DoesNotExist || conditions.GenerationMatch > 0 {
+		if obj.Generation != conditions.GenerationMatch {
+			return PreconditionFailed
+		}
+	}
+
 	return s.backend.CreateObject(toBackendObjects([]Object{obj})[0])
 }
 
@@ -104,6 +123,7 @@ func toBackendObjects(objects []Object) []backend.Object {
 			Name:       o.Name,
 			Content:    o.Content,
 			Crc32c:     o.Crc32c,
+			Generation: o.Generation,
 		})
 	}
 	return backendObjects
@@ -117,6 +137,7 @@ func fromBackendObjects(objects []backend.Object) []Object {
 			Name:       o.Name,
 			Content:    o.Content,
 			Crc32c:     o.Crc32c,
+			Generation: o.Generation,
 		})
 	}
 	return backendObjects

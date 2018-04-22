@@ -6,6 +6,9 @@ import (
 	"sync"
 )
 
+var ObjectNotFound = errors.New("object not found")
+var BucketNotFound = errors.New("bucket not found")
+
 // StorageMemory is an implementation of the backend storage that stores data in memory
 type StorageMemory struct {
 	buckets map[string][]Object
@@ -89,7 +92,7 @@ func (s *StorageMemory) ListObjects(bucketName string) ([]Object, error) {
 	defer s.mtx.RUnlock()
 	objects, ok := s.buckets[bucketName]
 	if !ok {
-		return nil, errors.New("bucket not found")
+		return nil, BucketNotFound
 	}
 	return objects, nil
 }
@@ -101,7 +104,7 @@ func (s *StorageMemory) GetObject(bucketName, objectName string) (Object, error)
 	defer s.mtx.RUnlock()
 	index := s.findObject(obj)
 	if index < 0 {
-		return obj, errors.New("object not found")
+		return obj, ObjectNotFound
 	}
 	return s.buckets[bucketName][index], nil
 }

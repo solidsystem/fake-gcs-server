@@ -7,6 +7,7 @@ package fakestorage
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -143,4 +144,28 @@ func (s *Server) Client() *storage.Client {
 	opt := option.WithHTTPClient(&http.Client{Transport: s.transport})
 	client, _ := storage.NewClient(context.Background(), opt)
 	return client
+}
+
+// writeError helps write error to response with correct statuscode.
+// Returns true if error was not nil and written, false if not.
+func writeError(w http.ResponseWriter, err error, code int) bool {
+	if err != nil {
+		w.WriteHeader(code)
+		resp := newErrorResponse(code, err.Error(), nil)
+		encoder := json.NewEncoder(w)
+		encoder.Encode(resp)
+		return true
+	}
+	return false
+}
+
+// writeServerError helps transform ServerError instances to a correct http
+// response. Does nothing and returns false if passed error is not a ServerError.
+func writeServerError(w http.ResponseWriter, err error) bool {
+	if err != nil {
+		if serverError, is := err.(*ServerError); is {
+			return writeError(w, serverError, serverError.StatusCode)
+		}
+	}
+	return false
 }
